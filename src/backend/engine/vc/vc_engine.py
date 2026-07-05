@@ -155,6 +155,11 @@ class VoiceConversionEngine:
             # 强度控制
             converted *= (intensity / 100.0)
 
+            # 整体淡入淡出 (消除边界咔哒声)
+            fade_len = min(hop_size * 3, output_len // 8)
+            output[:fade_len] *= np.linspace(0, 1, fade_len)
+            output[-fade_len:] *= np.linspace(1, 0, fade_len)
+
             # 归一化
             max_val = np.max(np.abs(converted))
             if max_val > 1.0:
@@ -218,25 +223,57 @@ class VoiceConversionEngine:
             if progress_callback:
                 progress_callback(35, "正在平滑旋律曲线...")
 
-            # Step 2: 平滑+量化到半音
-            # 用中值滤波去噪声
+            # Step 2: VAD门控 + 平滑 + 量化到半音
             pitch_smooth = ndimage.median_filter(pitch, size=7)
-            # 只保留置信度高的片段
-            confidence_threshold = 0.3
-            pitch_clean = np.where(confidence > confidence_threshold, pitch_smooth, 0.0)
-            # 量化到半音 (MIDI note)
+
+            # ===== VAD: 基于帧能量的语音活动检测 =====
+            hop_vad = 512
+            n_frames_vad = max(1, len(samples) // hop_vad)
+            frame_energies = np.array([
+                np.sqrt(np.mean(samples[i*hop_vad:min((i+1)*hop_vad, len(samples))] ** 2))
+                for i in range(n_frames_vad)
+            ])
+            max_energy = np.max(frame_energies) if np.max(frame_energies) > 0 else 1.0
+            # 相对阈值(最高5%) + 绝对阈值(-42dB) 双重保险
+            noise_floor = max(max_energy * 0.08, 0.015)
+
+            n_pf = len(pitch_smooth)
+            energy_gate = np.ones(n_pf, dtype=bool)
+            for i in range(n_pf):
+                fidx = (i * 512) // hop_vad
+                energy_gate[i] = frame_energies[fidx] > noise_floor if fidx < n_frames_vad else False
+
+            # 双重门控: 置信度>0.5 AND 能量>阈值
+            pitch_clean = np.where((confidence > 0.5) & energy_gate, pitch_smooth, 0.0)
+
+            # 额外硬门控: 原始音频RMS绝对阈值
+            for i in range(len(pitch_clean)):
+                if pitch_clean[i] > 0:
+                    s = i * 512
+                    e = min(s + 512, len(samples))
+                    rms = np.sqrt(np.mean(samples[s:e] ** 2)) if e > s else 0
+                    if rms < 0.008:
+                        pitch_clean[i] = 0.0
+
+            # 去掉孤立短音符(<5帧, ~0.1秒)
+            active = pitch_clean > 0
+            if np.any(active):
+                changes = np.diff(np.concatenate(([0], active.astype(int), [0])))
+                ss = np.where(changes == 1)[0]
+                es = np.where(changes == -1)[0]
+                for s, e in zip(ss, es):
+                    if e - s < 5:
+                        pitch_clean[s:e] = 0.0
+
+            # 量化到半音
             pitch_midi = np.zeros_like(pitch_clean)
             for i in range(len(pitch_clean)):
                 if pitch_clean[i] > 0:
                     midi = 12 * np.log2(pitch_clean[i] / 440.0) + 69
-                    pitch_midi[i] = np.round(midi)  # 量化到最近半音
+                    pitch_midi[i] = np.round(midi)
                 else:
                     pitch_midi[i] = 0
-
-            if progress_callback:
-                progress_callback(55, "正在合成乐器音色...")
-
-            # Step 3: 用乐器谐波合成
+# Step 3: 用乐器谐波合成
             hop_size = 512
             n_frames = len(pitch_midi)
             output_len = len(samples)
@@ -286,6 +323,9 @@ class VoiceConversionEngine:
                 frame_audio *= envelope * w_local * intensity
 
                 # 叠加到输出
+                # 边界保护：如果该帧的时间位置落在音频起止边界附近，降低音量
+                if start < hop_size or end > output_len - hop_size:
+                    frame_audio *= 0.3
                 output[start:end] += frame_audio
 
             # 归一化
@@ -446,43 +486,64 @@ class VoiceConversionEngine:
     # 旋律提取（供前端可视化使用）
     # ================================================================
     def extract_melody(self, audio_path: str) -> dict:
-        """提取音频的旋律音高，返回 pitch/confidence/midi_notes/note_names/timestamps"""
+        """提取音频的旋律音高，VAD门控确保静音段无音符"""
         samples, sr = self._read_wav(audio_path)
         pitch, confidence = self._detect_pitch(samples, sr)
         if len(pitch) == 0:
-            return {
-                "pitch": [], "confidence": [], "midi_notes": [],
-                "note_names": [], "timestamps": [], "hop_time": 512 / sr,
-            }
+            return {"pitch": [], "confidence": [], "midi_notes": [],
+                    "note_names": [], "timestamps": [], "hop_time": 512 / sr}
 
-        # 平滑
         pitch_smooth = ndimage.median_filter(pitch, size=5)
 
-        # 量化到半音
-        midi_notes = np.zeros_like(pitch_smooth, dtype=int)
+        # ===== VAD: 帧能量门控 (与乐器引擎同步) =====
+        hop_vad = 512
+        n_frames_vad = max(1, len(samples) // hop_vad)
+        energies = np.array([np.sqrt(np.mean(samples[i*hop_vad:min((i+1)*hop_vad, len(samples))]**2))
+                            for i in range(n_frames_vad)])
+        max_e = np.max(energies) if np.max(energies) > 0 else 1.0
+        noise_floor = max(max_e * 0.08, 0.015)
+
+        n_p = len(pitch_smooth)
+        gate = np.ones(n_p, dtype=bool)
+        for i in range(n_p):
+            fidx = (i * 512) // hop_vad
+            gate[i] = energies[fidx] > noise_floor if fidx < n_frames_vad else False
+
+        pitch_clean = np.where((confidence > 0.5) & gate, pitch_smooth, 0.0)
+
+        # 去孤立短音符
+        active = pitch_clean > 0
+        if np.any(active):
+            changes = np.diff(np.concatenate(([0], active.astype(int), [0])))
+            ss = np.where(changes == 1)[0]
+            es = np.where(changes == -1)[0]
+            for s, e in zip(ss, es):
+                if e - s < 5:
+                    pitch_clean[s:e] = 0.0
+
+        midi_notes = np.zeros_like(pitch_clean, dtype=int)
         note_names = []
-        note_labels = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        for i in range(len(pitch_smooth)):
-            if pitch_smooth[i] > 20 and confidence[i] > 0.2:
-                midi = int(round(12 * np.log2(pitch_smooth[i] / 440.0) + 69))
+        labels = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        for i in range(len(pitch_clean)):
+            if pitch_clean[i] > 20:
+                midi = int(round(12 * np.log2(pitch_clean[i] / 440.0) + 69))
                 midi = max(0, min(127, midi))
                 midi_notes[i] = midi
                 octave = midi // 12 - 1
-                note_name = note_labels[midi % 12] + str(octave)
-                note_names.append(note_name)
+                note_names.append(labels[midi % 12] + str(octave))
             else:
                 midi_notes[i] = 0
                 note_names.append("—")
 
         hop_time = 512 / sr
-        timestamps = np.arange(len(pitch_smooth)) * hop_time
+        timestamps = np.arange(len(pitch_clean)) * hop_time
 
         return {
-            "pitch": pitch_smooth,
-            "confidence": confidence,
-            "midi_notes": midi_notes,
+            "pitch": pitch_clean.tolist(),
+            "confidence": confidence.tolist(),
+            "midi_notes": midi_notes.tolist(),
             "note_names": note_names,
-            "timestamps": timestamps,
+            "timestamps": timestamps.tolist(),
             "hop_time": hop_time,
         }
     def create_custom_voice(self, sample_audio_path: str, voice_name: str,
@@ -494,4 +555,6 @@ class VoiceConversionEngine:
 
 
 vc_engine = VoiceConversionEngine()
+
+
 
