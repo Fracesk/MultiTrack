@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 import uvicorn, json, shutil, tempfile
 
 from engine.pipeline import pipeline
-from engine.vc import vc_engine, BUILTIN_VOICES
+from engine.vc import vc_engine, BUILTIN_VOICES, INSTRUMENT_VOICES
 from utils.audio_utils import validate_audio_file, get_audio_info, convert_to_wav, encode_audio
 from utils.file_manager import file_manager
 from config import API_HOST, API_PORT, TEMP_DIR, SAMPLE_RATE
@@ -63,7 +63,7 @@ async def get_spectrogram_by_path(audio_path: str = "", max_freq: int = 8000):
 
 @app.get("/api/voices")
 async def list_voices():
-    return {"builtin": BUILTIN_VOICES, "custom": []}
+    return {"builtin": BUILTIN_VOICES, "instrument": INSTRUMENT_VOICES, "custom": []}
 
 
 @app.post("/api/upload")
@@ -237,3 +237,4 @@ if __name__ == "__main__":
     print(f"VoiceCraft API on {API_HOST}:{API_PORT}")
     file_manager.start_cleanup_thread()
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level="info")
+

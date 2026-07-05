@@ -26,12 +26,28 @@ BUILTIN_VOICES = [
     {"id": "vintage", "name": "复古电台", "category": "特效"},
 ]
 
-# 音高偏移因子 (1.0 = 原调)
+# ====================
+# 乐器模仿音色
+# ====================
+INSTRUMENT_VOICES = [
+    {"id": "instrument-piano",  "name": "🎹 钢琴",   "category": "乐器模仿"},
+    {"id": "instrument-guitar", "name": "🎸 吉他",   "category": "乐器模仿"},
+    {"id": "instrument-violin", "name": "🎻 小提琴", "category": "乐器模仿"},
+    {"id": "instrument-flute",  "name": "🎵 长笛",   "category": "乐器模仿"},
+    {"id": "instrument-trumpet","name": "🎺 小号",   "category": "乐器模仿"},
+]
+
 VOICE_PITCH_FACTOR = {
     "male-bass": 0.7, "male-baritone": 0.85, "male-tenor": 0.95,
     "female-soprano": 1.2, "female-mezzo": 1.1, "female-sweet": 1.3,
     "child": 1.5, "anime-girl": 1.4, "anime-boy": 1.2,
     "robot": 1.0, "narrator": 0.9, "vintage": 0.8,
+    # 乐器模仿 - 音高偏移因子
+    "instrument-piano":   1.0,
+    "instrument-guitar":  1.0,
+    "instrument-violin":  1.0,
+    "instrument-flute":   1.0,
+    "instrument-trumpet": 1.0,
 }
 
 
@@ -43,7 +59,7 @@ class VoiceConversionEngine:
         self._lock = threading.Lock()
 
     def get_builtin_voices(self) -> List[Dict]:
-        return BUILTIN_VOICES
+        return BUILTIN_VOICES + INSTRUMENT_VOICES
 
     def load_voice(self, voice_id: str) -> bool:
         with self._lock:
@@ -58,7 +74,6 @@ class VoiceConversionEngine:
             self._loaded = False
 
     def _read_wav(self, file_path: str) -> tuple:
-        """读取 WAV 返回 (samples_float, sr)。"""
         with wave.open(file_path, "r") as wf:
             sr = wf.getframerate()
             n_frames = wf.getnframes()
@@ -99,26 +114,21 @@ class VoiceConversionEngine:
             progress_callback(50, "正在转换音色...")
 
         try:
-            # 读取源音频
             samples, sr = self._read_wav(audio_path)
             n = len(samples)
 
-            # 计算音高偏移因子
             pitch_factor = VOICE_PITCH_FACTOR.get(voice_id, 1.0)
             pitch_factor *= (2.0 ** (pitch_shift / 12.0))
 
             if progress_callback:
                 progress_callback(60, "正在调整音高...")
 
-            # 使用 FFT 进行音高搬移（频域重采样）
+            # FFT 音高搬移
             fft_data = np.fft.rfft(samples)
             freqs = np.fft.rfftfreq(n, d=1/sr)
-
-            # 频谱搬移：将频率按比例压缩/拉伸
             new_n = int(n / pitch_factor)
             new_fft_size = new_n // 2 + 1
             new_fft = np.zeros(new_fft_size, dtype=np.complex128)
-
             for i in range(len(fft_data)):
                 new_idx = int(i * pitch_factor)
                 if new_idx < new_fft_size:
@@ -126,19 +136,23 @@ class VoiceConversionEngine:
 
             converted = np.fft.irfft(new_fft, n=new_n)
 
-            # 应用音色滤镜（通过 FIR/IIR 滤波器）
             if progress_callback:
                 progress_callback(80, "正在应用音色滤镜...")
 
-            # 根据音色类型应用不同 EQ
-            # 男低音: 衰减高频
+            # 音色 EQ 滤镜
             if "bass" in voice_id or "robot" in voice_id:
                 b, a = signal.butter(4, 2000 / (sr/2), btype="low")
                 converted = signal.filtfilt(b, a, converted)
-            # 女高音/甜音: 增强高频
             elif "soprano" in voice_id or "sweet" in voice_id or "anime" in voice_id:
                 b, a = signal.butter(4, 3000 / (sr/2), btype="high")
                 converted = signal.filtfilt(b, a, converted)
+
+            # ====================
+            # 乐器模拟频谱塑形
+            # ====================
+            if voice_id.startswith("instrument-"):
+                instrument_type = voice_id.replace("instrument-", "")
+                converted = self._apply_instrument_timbre(converted, sr, instrument_type)
 
             # 强度控制
             converted *= (intensity / 100.0)
@@ -165,6 +179,68 @@ class VoiceConversionEngine:
         except Exception as e:
             print(f"VC error: {e}")
             return audio_path
+
+    # ====================
+    # 乐器音色模拟核心
+    # ====================
+    def _apply_instrument_timbre(self, samples: np.ndarray, sr: int,
+                                  instrument: str) -> np.ndarray:
+        """
+        通过频谱整形 + 谐波增强来模拟乐器音色。
+        每种乐器有独特的频谱包络和谐波分布。
+        """
+        n = len(samples)
+        spectrum = np.fft.rfft(samples)
+        freqs = np.fft.rfftfreq(n, d=1/sr)
+
+        filter_curve = np.ones(len(freqs), dtype=np.float32)
+
+        if instrument == "piano":
+            filter_curve *= np.exp(-freqs / 3500)
+            resonance = np.exp(-((freqs - 500) / 400) ** 2)
+            filter_curve += 0.6 * resonance
+
+        elif instrument == "guitar":
+            filter_curve *= np.exp(-freqs / 3000)
+            body_res = np.exp(-((freqs - 200) / 150) ** 2)
+            filter_curve += 0.7 * body_res
+            pick_res = np.exp(-((freqs - 3000) / 800) ** 2)
+            filter_curve += 0.4 * pick_res
+
+        elif instrument == "violin":
+            filter_curve *= np.exp(-freqs / 6000)
+            body_res = np.exp(-((freqs - 500) / 200) ** 2)
+            filter_curve += 0.5 * body_res
+            bright_res = np.exp(-((freqs - 3000) / 600) ** 2)
+            filter_curve += 0.8 * bright_res
+            high_res = np.exp(-((freqs - 6000) / 800) ** 2)
+            filter_curve += 0.3 * high_res
+
+        elif instrument == "flute":
+            filter_curve *= np.exp(-freqs / 2500)
+            warm_res = np.exp(-((freqs - 500) / 200) ** 2)
+            filter_curve += 0.6 * warm_res
+            notch = 1.0 - 0.4 * np.exp(-((freqs - 1500) / 300) ** 2)
+            filter_curve *= notch
+
+        elif instrument == "trumpet":
+            filter_curve *= np.exp(-freqs / 5000)
+            body_res = np.exp(-((freqs - 400) / 200) ** 2)
+            filter_curve += 0.5 * body_res
+            brass_res = np.exp(-((freqs - 3000) / 400) ** 2)
+            filter_curve += 1.0 * brass_res
+            extra_res = np.exp(-((freqs - 4500) / 400) ** 2)
+            filter_curve += 0.5 * extra_res
+
+        filter_curve = np.clip(filter_curve, 0.0, 2.0)
+        modified = spectrum * filter_curve
+        result = np.fft.irfft(modified, n=n)
+
+        max_val = np.max(np.abs(result))
+        if max_val > 0:
+            result = result / max_val * 0.95
+
+        return result
 
     def create_custom_voice(self, sample_audio_path: str, voice_name: str,
                             progress_callback=None) -> Optional[str]:
