@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 人声变声引擎 + 乐器旋律模仿引擎
 - 人声变声：通过 FFT 重采样 + 频谱搬移实现音高变化
@@ -149,16 +149,11 @@ class VoiceConversionEngine:
                 b, a = signal.butter(4, 2000 / (sr/2), btype="low")
                 converted = signal.filtfilt(b, a, converted)
             elif "soprano" in voice_id or "sweet" in voice_id or "anime" in voice_id:
-                b, a = signal.butter(4, 3000 / (sr/2), btype="high")
+                b, a = signal.butter(4, 800 / (sr/2), btype="high")
                 converted = signal.filtfilt(b, a, converted)
 
             # 强度控制
             converted *= (intensity / 100.0)
-
-            # 整体淡入淡出 (消除边界咔哒声)
-            fade_len = min(hop_size * 3, output_len // 8)
-            output[:fade_len] *= np.linspace(0, 1, fade_len)
-            output[-fade_len:] *= np.linspace(1, 0, fade_len)
 
             # 归一化
             max_val = np.max(np.abs(converted))
@@ -347,136 +342,155 @@ class VoiceConversionEngine:
     # 乐器音色参数表 (每种乐器有独有的音色特征)
     # 每个条目: (谐波幅度列表, 起音时间占比, 释放时间占比, 噪声量, 颤音量)
     # ================================================================
+        # ================================================================
+    # 乐器音色参数表 — 基于共振峰(Formant) + 瞬态(Transient)模型
+    # 每种乐器有独特的频谱包络(共振峰)、起音瞬态、颤音特征
+    # ================================================================
     def _get_instrument_params(self, instrument: str) -> dict:
         """
         返回完整乐器参数:
-        - harmonics: [基频, 2次, 3次, ...] 谐波幅度
-        - attack_ratio: 起音时间占帧长的比例
-        - release_ratio: 释放时间占帧长的比例
-        - noise_amount: 非谐波噪声量 (0~1)
-        - vibrato_amount: 颤音深度 (半音)
-        - vibrato_rate: 颤音频率 (Hz)
-        - pitch_fluctuation: 音高随机波动 (半音)
+        - formants: [(中心频率Hz, 带宽Hz, 增益), ...] 共振峰序列
+        - noise_formant: 噪音共振峰 (噪音的频谱染色)
+        - noise_amount: 噪音成分总量
+        - attack_ms: 起音时间(毫秒)
+        - decay_ms: 衰减时间
+        - sustain_level: 延音电平(0~1)
+        - release_ms: 释放时间
+        - vibrato_rate: 颤音速率(Hz)
+        - vibrato_depth: 颤音深度(半音)
+        - brightness: 整体亮度(0~1)
         """
         params = {
             "piano": {
-                "harmonics": [1.0, 0.65, 0.28, 0.12, 0.06, 0.03, 0.01],
-                "attack_ratio": 0.02,    # 极快起音 (敲击感)
-                "release_ratio": 0.35,    # 长释放 (延音踏板感)
-                "noise_amount": 0.15,     # 敲击噪音
-                "vibrato_amount": 0.0,
-                "vibrato_rate": 0.0,
-                "pitch_fluctuation": 0.3, # 轻微音高不稳 (真实钢琴)
+                # 钢琴共振峰: 低频琴体共振 + 中频敲击
+                "formants": [(200, 120, 1.0), (600, 300, 0.7), (2500, 800, 0.3), (4000, 1000, 0.15)],
+                "noise_formant": (3000, 1500, 0.08),
+                "noise_amount": 0.10,
+                "attack_ms": 3,    # 极快起音(敲击)
+                "decay_ms": 600,   # 慢衰减
+                "sustain_level": 0.3,
+                "release_ms": 400,
+                "vibrato_rate": 0,
+                "vibrato_depth": 0,
+                "brightness": 0.5,
             },
             "guitar": {
-                "harmonics": [1.0, 0.55, 0.38, 0.18, 0.08, 0.03, 0.02],
-                "attack_ratio": 0.01,    # 极快起音 (拨弦)
-                "release_ratio": 0.25,    # 中长释放
-                "noise_amount": 0.25,     # 拨弦噪音 (吉他的标志)
-                "vibrato_amount": 0.02,   # 轻微颤音
-                "vibrato_rate": 4.5,
-                "pitch_fluctuation": 0.2,
+                # 吉他共振峰: 低频琴体 + 中频拨弦峰值
+                "formants": [(180, 100, 1.0), (450, 250, 0.8), (1200, 400, 0.5), (3200, 700, 0.25)],
+                "noise_formant": (4000, 2000, 0.15),
+                "noise_amount": 0.20,  # 拨弦噪音显著
+                "attack_ms": 2,     # 极快(拨弦)
+                "decay_ms": 400,
+                "sustain_level": 0.4,
+                "release_ms": 300,
+                "vibrato_rate": 4,
+                "vibrato_depth": 0.03,
+                "brightness": 0.6,
             },
             "violin": {
-                "harmonics": [1.0, 0.85, 0.65, 0.45, 0.28, 0.18, 0.12, 0.08, 0.04],
-                "attack_ratio": 0.25,    # 慢起音 (揉弦)
-                "release_ratio": 0.10,    # 快释放
-                "noise_amount": 0.08,     # 弓毛摩擦音
-                "vibrato_amount": 0.06,   # 强颤音 (小提琴标志)
-                "vibrato_rate": 5.5,      # 快速颤音
-                "pitch_fluctuation": 0.5, # 微妙音高变化
+                # 小提琴共振峰: 低频琴身 + 标志性2-4kHz明亮共振峰
+                "formants": [(250, 150, 1.0), (500, 200, 0.7), (2200, 500, 0.9), (3500, 600, 0.7), (6000, 800, 0.3)],
+                "noise_formant": (5000, 2000, 0.05),
+                "noise_amount": 0.08,
+                "attack_ms": 80,    # 慢起音(揉弦)
+                "decay_ms": 200,
+                "sustain_level": 0.8,  # 持续性强
+                "release_ms": 100,
+                "vibrato_rate": 6,   # 快速颤音
+                "vibrato_depth": 0.08,  # 深颤
+                "brightness": 0.8,
             },
             "flute": {
-                "harmonics": [1.0, 0.28, 0.08, 0.02, 0.005],
-                "attack_ratio": 0.12,    # 中起音 (气息建立)
-                "release_ratio": 0.08,    # 中释放
-                "noise_amount": 0.30,     # 气声噪音 (长笛标志)
-                "vibrato_amount": 0.04,   # 气颤音
-                "vibrato_rate": 4.0,
-                "pitch_fluctuation": 0.1, # 极稳定
+                # 长笛共振峰: 纯净单峰 + 气声
+                "formants": [(600, 200, 1.0), (1200, 500, 0.3), (2500, 800, 0.15)],
+                "noise_formant": (3000, 2500, 0.25),  # 气声宽频
+                "noise_amount": 0.30,  # 大量气声
+                "attack_ms": 50,    # 气息建立
+                "decay_ms": 150,
+                "sustain_level": 0.9,
+                "release_ms": 80,
+                "vibrato_rate": 4,
+                "vibrato_depth": 0.04,
+                "brightness": 0.4,  # 偏暖
             },
             "trumpet": {
-                "harmonics": [1.0, 0.88, 0.72, 0.52, 0.32, 0.18, 0.10, 0.05],
-                "attack_ratio": 0.06,    # 快起音 (爆发感)
-                "release_ratio": 0.12,    # 中释放
-                "noise_amount": 0.05,     # 少量唇噪
-                "vibrato_amount": 0.02,   # 轻微颤音
-                "vibrato_rate": 3.5,
-                "pitch_fluctuation": 0.3,
+                # 小号共振峰: 金属管体共振峰 2.5-4kHz
+                "formants": [(300, 150, 1.0), (600, 250, 0.6), (2800, 400, 0.9), (3500, 500, 0.7), (4500, 600, 0.3)],
+                "noise_formant": (4000, 1500, 0.03),
+                "noise_amount": 0.05,
+                "attack_ms": 15,    # 爆发感
+                "decay_ms": 300,
+                "sustain_level": 0.7,
+                "release_ms": 200,
+                "vibrato_rate": 3,
+                "vibrato_depth": 0.02,
+                "brightness": 0.9,  # 明亮金属
             },
         }
         return params.get(instrument, params["piano"])
 
-    # ================================================================
-    # 乐器音色合成核心 (重写)
-    # ================================================================
-    def _synthesize_note(self, freq: float, sr: int, frame_idx: int,
-                          params: dict, duration_frames: int,
-                          note_active_count: int) -> np.ndarray:
-        """
-        合成一帧的音符，包含：
-        - 谐波叠加
-        - 起音/释放包络
-        - 噪音成分（拨弦/气声/弓噪）
-        - 颤音/音高微变
-        """
+    def _synthesize_note(self, freq, sr, frame_idx, params, n_frames_notes, note_count):
         hop = 512
-        frame_time = frame_idx * hop / sr
-        total_samples = duration_frames * hop
-        # 该帧实际样本数 (最后一帧可能较短)
-        actual_samples = hop
-        t = np.arange(actual_samples, dtype=np.float64) / sr
+        t = np.arange(hop, dtype=np.float64) / sr
+        ft = frame_idx * hop / sr
+        fm = params["formants"]
+        na = params["noise_amount"]
+        nf, nbw, ng = params["noise_formant"]
+        ams = params["attack_ms"]
+        dms = params["decay_ms"]
+        sl = params["sustain_level"]
+        rms = params["release_ms"]
+        vr = params["vibrato_rate"]
+        vd = params["vibrato_depth"]
+        bri = params["brightness"]
 
-        harmonics = params["harmonics"]
-        noise_amount = params["noise_amount"]
-        vibrato_amount = params["vibrato_amount"]
-        vibrato_rate = params["vibrato_rate"]
-        pitch_fluctuation = params["pitch_fluctuation"]
-
-        # 1) 颤音: 缓慢调制音高
-        if vibrato_amount > 0:
-            vibrato_hz = vibrato_amount * np.sin(2 * np.pi * vibrato_rate * frame_time)
-            current_freq = freq * (2.0 ** (vibrato_hz / 12.0))
+        if vr > 0 and vd > 0:
+            cf = freq * (2.0 ** (vd * np.sin(2 * np.pi * vr * ft) / 12.0))
         else:
-            current_freq = freq
+            cf = freq
 
-        # 2) 音高微随机波动 (每个音符周期变化)
-        perlin_shift = pitch_fluctuation * np.sin(2 * np.pi * 0.7 * frame_time) * 0.5
-        current_freq *= (2.0 ** (perlin_shift / 12.0))
-
-        # 3) 谐波叠加合成
-        frame_audio = np.zeros(actual_samples, dtype=np.float64)
-        for h_idx, h_amp in enumerate(harmonics):
-            h_freq = float(current_freq) * (h_idx + 1)
-            if h_freq > sr / 2:
+        wave = np.zeros(hop, dtype=np.float64)
+        for h in range(1, 17):
+            hf = float(cf) * h
+            if hf > sr / 2.0:
                 break
-            # 每个谐波独立的相位 (避免所有谐波同相产生的刺耳感)
-            phase_offset = 2 * np.pi * h_freq * frame_time
-            # 高次谐波加一点点随机相位偏移 (更自然的音色)
-            rand_phase = h_idx * 0.1  # 固定的相位移位
-            frame_audio += h_amp * np.sin(2 * np.pi * h_freq * t + phase_offset + rand_phase)
+            ha = (1.0 / h ** 0.8) * np.exp(-h * (1.0 - bri) * 0.3)
+            ph = 2 * np.pi * hf * ft + h * 0.3
+            wave += ha * np.sin(2 * np.pi * hf * t + ph)
 
-        # 4) 非谐波噪音成分
-        if noise_amount > 0:
-            noise = np.random.randn(actual_samples).astype(np.float64)
-            # 噪音成分类似滤波白噪音 (通过简单的低通)
-            noise_smooth = (noise + np.roll(noise, 1)) * 0.5
-            frame_audio += noise_amount * noise_smooth * 0.3
+        # ?????
+        spec = np.fft.rfft(wave)
+        fb = np.fft.rfftfreq(hop, d=1.0 / sr)
+        fc = np.ones(len(fb), dtype=np.float64)
+        for fc_, fb_, fg_ in fm:
+            fc += fg_ * np.exp(-((fb - fc_) / (fb_ / 2)) ** 2)
+        sf = spec * fc
 
-        # 5) 包络: 起音 + 释放
-        # 起音: 根据乐器不同有差异
-        attack_len = max(2, int(actual_samples * params["attack_ratio"] * 3))
-        release_len = max(2, int(actual_samples * params["release_ratio"] * 2))
+        # ????
+        if na > 0.01:
+            noise = np.random.randn(hop).astype(np.float64)
+            ns = np.fft.rfft(noise)
+            nfilt = np.exp(-((fb - nf) / (nbw / 2)) ** 2)
+            nsf = ns * (1.0 + ng * nfilt)
+            noise_out = np.fft.irfft(nsf, n=hop)
+            sf += np.fft.rfft(noise_out * na * 0.3)
 
-        envelope = np.ones(actual_samples)
-        if attack_len < actual_samples:
-            envelope[:attack_len] = np.linspace(0, 1, attack_len) ** 0.7
-        if release_len < actual_samples:
-            envelope[-release_len:] = np.linspace(1, 0, release_len) ** 1.2
+        wf = np.fft.irfft(sf, n=hop)
 
-        frame_audio *= envelope
-
-        return frame_audio
+        # ADSR
+        tms = (n_frames_notes * hop) / sr * 1000
+        cms = ft * 1000
+        if cms < ams:
+            env = (cms / ams) ** 0.5
+        elif cms < ams + dms:
+            env = 1.0 - (1.0 - sl) * (cms - ams) / dms
+        elif cms < tms - rms:
+            env = sl
+        else:
+            env = sl * max(0.0, 1.0 - (cms - (tms - rms)) / rms)
+        wf *= max(0.0, min(1.0, env))
+        wf *= np.hanning(hop)
+        return wf
     def _detect_pitch(self, samples: np.ndarray, sr: int,
                           fmin: float = 55.0, fmax: float = 1600.0,
                           hop: int = 512) -> tuple:
