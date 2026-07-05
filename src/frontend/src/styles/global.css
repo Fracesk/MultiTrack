@@ -1,0 +1,217 @@
+﻿* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Step workspace layout */
+.workspace-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f5f7fa;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 24px;
+  background: #fff;
+  border-bottom: 1px solid #e8e8e8;
+  flex-shrink: 0;
+}
+
+.workspace-header h1 {
+  font-size: 20px;
+  color: #1F4788;
+  margin: 0;
+  margin-left: 12px;
+  font-weight: 600;
+}
+
+.workspace-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  overflow-y: auto;
+  gap: 24px;
+}
+
+/* Step cards */
+.step-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e8e8e8;
+}
+
+.step-card.active {
+  border-color: #1F4788;
+  box-shadow: 0 2px 12px rgba(31, 71, 136, 0.12);
+}
+
+.step-card.completed {
+  border-color: #52c41a;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 12px;
+}
+
+.step-number {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  background: #f0f0f0;
+  color: #999;
+  flex-shrink: 0;
+}
+
+.step-card.active .step-number {
+  background: #1F4788;
+  color: #fff;
+}
+
+.step-card.completed .step-number {
+  background: #52c41a;
+  color: #fff;
+}
+
+.step-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.step-content {
+  padding-left: 44px;
+}
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed #d9d9d9;
+  border-radius: 12px;
+  padding: 48px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  background: #fafafa;
+}
+
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: #1F4788;
+  background: #f0f5ff;
+}
+
+.drop-zone-icon {
+  font-size: 48px;
+  color: #1F4788;
+  margin-bottom: 16px;
+}
+
+.drop-zone-text {
+  font-size: 16px;
+  color: #666;
+}
+
+.drop-zone-hint {
+  font-size: 13px;
+  color: #999;
+  margin-top: 8px;
+}
+
+/* Progress bar */
+.progress-container {
+  margin: 16px 0;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #666;
+}
+
+/* Stem list */
+.stem-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.stem-item {
+  padding: 16px;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.stem-item:hover {
+  border-color: #1F4788;
+  background: #f0f5ff;
+}
+
+.stem-item.active {
+  border-color: #1F4788;
+  background: #e6f0ff;
+}
+
+.stem-icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.stem-name {
+  font-weight: 500;
+  color: #333;
+}
+
+/* Mixer controls */
+.mixer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.mixer-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.mixer-label {
+  width: 80px;
+  font-weight: 500;
+  color: #333;
+}
+
+.mixer-slider {
+  flex: 1;
+}
