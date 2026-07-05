@@ -51,7 +51,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
 
   const handleSeparate = async () => {
     if (!audioFile || !audioFile.fileObj) {
-      message.error('Please import an audio file first');
+      message.error('请先导入音频文件');
       return;
     }
 
@@ -65,13 +65,13 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
 
     try {
       setProcessing(true);
-      setProcessingProgress(5, 'Uploading and separating...');
+      setProcessingProgress(5, '正在上传并分离...');
 
       const result = await separateAudio(audioFile.fileObj, mode);
 
       if (result.status !== 'success') {
         cleanup();
-        message.error('Separation failed');
+        message.error('分离失败');
         setProcessing(false);
         return;
       }
@@ -96,7 +96,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
 
       if (stemList.length === 0) {
         cleanup();
-        message.error('No stems returned');
+        message.error('没有返回音轨');
         setProcessing(false);
         return;
       }
@@ -105,8 +105,8 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
       setStems(stemList);
       setSeparated(true);
       setProcessing(false);
-      setProcessingProgress(100, 'Done');
-      message.success('Separation complete! ' + stemList.length + ' stems');
+      setProcessingProgress(100, '完成');
+      message.success('分离完成！共 ' + stemList.length + ' 个音轨');
 
       // Load spectrograms for each stem
       for (const stem of stemList) {
@@ -118,7 +118,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
     } catch (e: any) {
       cleanup();
       console.error('Separation error:', e);
-      message.error('Separation failed: ' + (e.message || 'Backend unavailable'));
+      message.error('Separation failed: ' + (e.message || '后端不可用'));
       setProcessing(false);
     }
   };
@@ -163,8 +163,8 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
           <Text strong style={{ display: 'block', marginBottom: 8 }}>Separation Mode</Text>
           <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)}
             disabled={processing || separated} optionType='button' buttonStyle='solid'>
-            <Radio.Button value='2stems'>2-Stem (Vocals + Accompaniment)</Radio.Button>
-            <Radio.Button value='4stems'>4-Stem (Vocals + Bass + Drums + Other)</Radio.Button>
+            <Radio.Button value='2stems'>2轨（人声 + 伴奏）</Radio.Button>
+            <Radio.Button value='4stems'>4轨（人声 + 贝斯 + 鼓 + 其他）</Radio.Button>
           </Radio.Group>
         </div>
 
@@ -182,7 +182,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
           <Button type='primary' size='large' icon={<NodeIndexOutlined />}
             onClick={handleSeparate} disabled={!audioFile?.fileObj}
             style={{ marginBottom: 16 }}>
-            {audioFile?.fileObj ? 'Start Separation' : 'Import Audio First'}
+            {audioFile?.fileObj ? '开始分离' : '请先导入音频'}
           </Button>
         )}
 
@@ -197,7 +197,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
                   size='small'
                   style={{ marginBottom: 4 }}
                   items={[
-                    { key: 'original', label: 'Original' },
+                    { key: 'original', label: '原始音频' },
                     ...stems.map((s) => ({
                       key: s.id, label: (STEM_ICONS[s.type] || '') + ' ' + s.name,
                     })),
@@ -209,7 +209,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
                   pitch={currentSpec.pitch}
                   chroma={currentSpec.chroma}
                   noteNames={currentSpec.note_names}
-                  label={activeSpec === 'original' ? 'Original Audio' : (stems.find((s) => s.id === activeSpec)?.name || '') + ' Spectrogram'}
+                  label={activeSpec === 'original' ? '原始音频' : (stems.find((s) => s.id === activeSpec)?.name || '') + ' Spectrogram'}
                   height={280}
                   maxFreq={8000}
                   currentTime={activeStem === activeSpec ? currentTime : undefined}
@@ -249,13 +249,13 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Tooltip title='View spectrogram'>
+                    <Tooltip title='查看频谱图'>
                       <BarChartOutlined
                         style={{ cursor: 'pointer', color: activeSpec === stem.id ? '#1F4788' : '#999' }}
                         onClick={() => setActiveSpec(stem.id)}
                       />
                     </Tooltip>
-                    <Tooltip title='Download'>
+                    <Tooltip title='下载'>
                       <DownloadOutlined
                         style={{ cursor: 'pointer', color: '#999' }}
                         onClick={() => handleExport(stem.filePath, stem.name)}
@@ -268,7 +268,7 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
 
             <div style={{ marginTop: 20, borderTop: '1px solid #f0f0f0', paddingTop: 16 }}>
               <Space>
-                <Button onClick={onPrev} icon={<LeftOutlined />}>Back</Button>
+                <Button onClick={onPrev} icon={<LeftOutlined />}>返回</Button>
                 <Button type='primary' size='large' onClick={onNext} icon={<RightOutlined />}>
                   Voice Conversion
                 </Button>
@@ -282,5 +282,6 @@ const StepSeparate: React.FC<{ onNext: () => void; onPrev: () => void }> = ({ on
 };
 
 export default StepSeparate;
+
 
 

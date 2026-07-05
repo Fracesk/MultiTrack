@@ -153,6 +153,25 @@ async def get_audio(filename: str):
     raise HTTPException(status_code=404, detail=f"Audio file not found: {filename}")
 
 
+@app.get("/api/melody")
+async def get_melody(audio_path: str = ""):
+    """提取音频的旋律音高序列，用于前端可视化展示音高轮廓"""
+    if not audio_path or not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="音频文件未找到")
+    try:
+        pitch_data = vc_engine.extract_melody(audio_path)
+        return {
+            "status": "success",
+            "pitch": pitch_data["pitch"].tolist(),
+            "confidence": pitch_data["confidence"].tolist(),
+            "midi_notes": pitch_data["midi_notes"].tolist(),
+            "note_names": pitch_data["note_names"],
+            "timestamps": pitch_data["timestamps"].tolist(),
+            "hop_time": pitch_data["hop_time"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"旋律提取失败: {str(e)}")
+
 @app.post("/api/convert")
 async def convert(audio_path: str = Form(...), voice_id: str = Form(...),
                   pitch_shift: float = Form(0), intensity: int = Form(80)):
@@ -237,4 +256,5 @@ if __name__ == "__main__":
     print(f"VoiceCraft API on {API_HOST}:{API_PORT}")
     file_manager.start_cleanup_thread()
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level="info")
+
 

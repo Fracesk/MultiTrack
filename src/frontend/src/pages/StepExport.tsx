@@ -39,7 +39,7 @@ const StepExport: React.FC<{ onPrev: () => void; onReset: () => void }> = ({ onP
 
   const handleExport = async () => {
     if (!audioFile?.fileObj) {
-      message.error("没有可导出的音频文件");
+      message.error('没有可导出的音频文件');
       return;
     }
 
@@ -78,14 +78,14 @@ const StepExport: React.FC<{ onPrev: () => void; onReset: () => void }> = ({ onP
         setExportPath(result.export_path);
         setExported(true);
         setProcessingProgress(100, "导出成功");
-        message.success("导出成功！");
+        message.success('导出成功！');
       } else {
-        message.error("导出失败: " + result.message);
+        message.error('导出失败：' + result.message);
       }
     } catch (e: any) {
       console.error("Export error:", e);
       // Fallback: show download link if file was created
-      message.warning("后端导出失败，请检查后端服务");
+      message.warning('后端导出失败，请检查后端服务');
     }
 
     setProcessing(false);
@@ -241,3 +241,4 @@ const StepExport: React.FC<{ onPrev: () => void; onReset: () => void }> = ({ onP
 };
 
 export default StepExport;
+

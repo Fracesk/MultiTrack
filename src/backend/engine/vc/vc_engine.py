@@ -442,6 +442,49 @@ class VoiceConversionEngine:
         conf_arr = np.concatenate(all_conf)[:n_frames]
         return pitch_arr, conf_arr
 
+    # ================================================================
+    # 旋律提取（供前端可视化使用）
+    # ================================================================
+    def extract_melody(self, audio_path: str) -> dict:
+        """提取音频的旋律音高，返回 pitch/confidence/midi_notes/note_names/timestamps"""
+        samples, sr = self._read_wav(audio_path)
+        pitch, confidence = self._detect_pitch(samples, sr)
+        if len(pitch) == 0:
+            return {
+                "pitch": [], "confidence": [], "midi_notes": [],
+                "note_names": [], "timestamps": [], "hop_time": 512 / sr,
+            }
+
+        # 平滑
+        pitch_smooth = ndimage.median_filter(pitch, size=5)
+
+        # 量化到半音
+        midi_notes = np.zeros_like(pitch_smooth, dtype=int)
+        note_names = []
+        note_labels = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        for i in range(len(pitch_smooth)):
+            if pitch_smooth[i] > 20 and confidence[i] > 0.2:
+                midi = int(round(12 * np.log2(pitch_smooth[i] / 440.0) + 69))
+                midi = max(0, min(127, midi))
+                midi_notes[i] = midi
+                octave = midi // 12 - 1
+                note_name = note_labels[midi % 12] + str(octave)
+                note_names.append(note_name)
+            else:
+                midi_notes[i] = 0
+                note_names.append("—")
+
+        hop_time = 512 / sr
+        timestamps = np.arange(len(pitch_smooth)) * hop_time
+
+        return {
+            "pitch": pitch_smooth,
+            "confidence": confidence,
+            "midi_notes": midi_notes,
+            "note_names": note_names,
+            "timestamps": timestamps,
+            "hop_time": hop_time,
+        }
     def create_custom_voice(self, sample_audio_path: str, voice_name: str,
                             progress_callback=None) -> Optional[str]:
         if progress_callback:
@@ -451,3 +494,4 @@ class VoiceConversionEngine:
 
 
 vc_engine = VoiceConversionEngine()
+
