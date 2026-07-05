@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 人声变声引擎 + 乐器旋律模仿引擎
 - 人声变声：通过 FFT 重采样 + 频谱搬移实现音高变化
@@ -282,51 +282,35 @@ class VoiceConversionEngine:
             # 为每帧合成乐器音色
             t = np.arange(hop_size, dtype=np.float64) / sr  # 每帧的时间向量
 
-            # 获取乐器的谐波幅度表
-            harmonics = self._get_instrument_harmonics(instrument_type)
+            # Step 3: 用乐器谐波合成 (新音色引擎)
+            hop_size = 512
+            n_frames = len(pitch_midi)
+            output_len = len(samples)
+            output = np.zeros(output_len, dtype=np.float64)
 
-            # 窗口函数用于帧间平滑
+            params = self._get_instrument_params(instrument_type)
             window = np.hanning(hop_size)
 
             for frame in range(n_frames):
                 midi_note = pitch_midi[frame]
                 if midi_note <= 0:
-                    # 休止符：静音
                     continue
 
                 freq = 440.0 * (2.0 ** ((midi_note - 69) / 12.0))
+                frame_audio = self._synthesize_note(freq, sr, frame, params, n_frames, 0)
+
                 start = frame * hop_size
                 end = min(start + hop_size, output_len)
                 actual_len = end - start
 
                 if actual_len < hop_size:
-                    t_local = np.arange(actual_len, dtype=np.float64) / sr
+                    frame_audio = frame_audio[:actual_len]
                     w_local = window[:actual_len]
                 else:
-                    t_local = t
                     w_local = window
 
-                # 合成该帧的乐器音
-                frame_audio = np.zeros(actual_len, dtype=np.float64)
-                for h_idx, h_amp in enumerate(harmonics):
-                    h_freq = freq * (h_idx + 1)
-                    if h_freq > sr / 2:
-                        break  # 超过奈奎斯特频率截止
-                    phase_offset = 2 * np.pi * h_freq * (frame * hop_size / sr)
-                    frame_audio += h_amp * np.sin(2 * np.pi * h_freq * t_local + phase_offset)
-
-                # 包络：起音+衰减
-                # 简单 AD 包络：快速起音 (10%)，缓慢衰减
-                envelope = np.ones(actual_len)
-                attack_len = max(1, int(actual_len * 0.1))
-                envelope[:attack_len] = np.linspace(0, 1, attack_len)
-                frame_audio *= envelope * w_local * intensity
-
-                # 叠加到输出
-                # 边界保护：如果该帧的时间位置落在音频起止边界附近，降低音量
-                if start < hop_size or end > output_len - hop_size:
-                    frame_audio *= 0.3
-                output[start:end] += frame_audio
+                frame_audio *= w_local * intensity
+                output[start:end] += frame_audio[:actual_len]
 
             # 归一化
             max_val = np.max(np.abs(output))
@@ -359,132 +343,208 @@ class VoiceConversionEngine:
     # 乐器谐波结构表 (决定乐器音色特征)
     # 每种乐器的前N阶谐波幅度分布
     # ================================================================
-    def _get_instrument_harmonics(self, instrument: str) -> List[float]:
+        # ================================================================
+    # 乐器音色参数表 (每种乐器有独有的音色特征)
+    # 每个条目: (谐波幅度列表, 起音时间占比, 释放时间占比, 噪声量, 颤音量)
+    # ================================================================
+    def _get_instrument_params(self, instrument: str) -> dict:
         """
-        返回乐器的谐波幅度列表 [基频, 2次谐波, 3次谐波, ...]
-        幅度范围 0.0 ~ 1.0
+        返回完整乐器参数:
+        - harmonics: [基频, 2次, 3次, ...] 谐波幅度
+        - attack_ratio: 起音时间占帧长的比例
+        - release_ratio: 释放时间占帧长的比例
+        - noise_amount: 非谐波噪声量 (0~1)
+        - vibrato_amount: 颤音深度 (半音)
+        - vibrato_rate: 颤音频率 (Hz)
+        - pitch_fluctuation: 音高随机波动 (半音)
         """
-        harmonics_map = {
-            "piano": [
-                1.0,    # 基频 — 饱满
-                0.7,    # 2次 — 八度音，强
-                0.3,    # 3次 — 五度音，中
-                0.15,   # 4次
-                0.08,   # 5次
-                0.03,   # 6次
-                0.01,   # 7次
-            ],
-            "guitar": [
-                1.0,    # 基频
-                0.6,    # 2次
-                0.4,    # 3次 — 吉他五度泛音丰富
-                0.2,    # 4次
-                0.1,    # 5次
-                0.04,   # 6次
-                0.02,   # 7次
-            ],
-            "violin": [
-                1.0,    # 基频
-                0.8,    # 2次 — 很强
-                0.6,    # 3次 — 很强，小提琴特征
-                0.4,    # 4次
-                0.25,   # 5次
-                0.15,   # 6次
-                0.1,    # 7次
-                0.06,   # 8次 — 高次泛音丰富
-                0.03,   # 9次
-            ],
-            "flute": [
-                1.0,    # 基频 — 极强
-                0.3,    # 2次 — 很弱，长笛特点是泛音少
-                0.1,    # 3次
-                0.02,   # 4次
-                0.005,  # 5次
-            ],
-            "trumpet": [
-                1.0,    # 基频
-                0.85,   # 2次 — 极强
-                0.7,    # 3次 — 铜管特征
-                0.5,    # 4次
-                0.3,    # 5次
-                0.15,   # 6次
-                0.08,   # 7次
-                0.04,   # 8次
-            ],
+        params = {
+            "piano": {
+                "harmonics": [1.0, 0.65, 0.28, 0.12, 0.06, 0.03, 0.01],
+                "attack_ratio": 0.02,    # 极快起音 (敲击感)
+                "release_ratio": 0.35,    # 长释放 (延音踏板感)
+                "noise_amount": 0.15,     # 敲击噪音
+                "vibrato_amount": 0.0,
+                "vibrato_rate": 0.0,
+                "pitch_fluctuation": 0.3, # 轻微音高不稳 (真实钢琴)
+            },
+            "guitar": {
+                "harmonics": [1.0, 0.55, 0.38, 0.18, 0.08, 0.03, 0.02],
+                "attack_ratio": 0.01,    # 极快起音 (拨弦)
+                "release_ratio": 0.25,    # 中长释放
+                "noise_amount": 0.25,     # 拨弦噪音 (吉他的标志)
+                "vibrato_amount": 0.02,   # 轻微颤音
+                "vibrato_rate": 4.5,
+                "pitch_fluctuation": 0.2,
+            },
+            "violin": {
+                "harmonics": [1.0, 0.85, 0.65, 0.45, 0.28, 0.18, 0.12, 0.08, 0.04],
+                "attack_ratio": 0.25,    # 慢起音 (揉弦)
+                "release_ratio": 0.10,    # 快释放
+                "noise_amount": 0.08,     # 弓毛摩擦音
+                "vibrato_amount": 0.06,   # 强颤音 (小提琴标志)
+                "vibrato_rate": 5.5,      # 快速颤音
+                "pitch_fluctuation": 0.5, # 微妙音高变化
+            },
+            "flute": {
+                "harmonics": [1.0, 0.28, 0.08, 0.02, 0.005],
+                "attack_ratio": 0.12,    # 中起音 (气息建立)
+                "release_ratio": 0.08,    # 中释放
+                "noise_amount": 0.30,     # 气声噪音 (长笛标志)
+                "vibrato_amount": 0.04,   # 气颤音
+                "vibrato_rate": 4.0,
+                "pitch_fluctuation": 0.1, # 极稳定
+            },
+            "trumpet": {
+                "harmonics": [1.0, 0.88, 0.72, 0.52, 0.32, 0.18, 0.10, 0.05],
+                "attack_ratio": 0.06,    # 快起音 (爆发感)
+                "release_ratio": 0.12,    # 中释放
+                "noise_amount": 0.05,     # 少量唇噪
+                "vibrato_amount": 0.02,   # 轻微颤音
+                "vibrato_rate": 3.5,
+                "pitch_fluctuation": 0.3,
+            },
         }
-        return harmonics_map.get(instrument, [1.0, 0.5, 0.3])
+        return params.get(instrument, params["piano"])
 
     # ================================================================
-    # 音频基频检测 (自相关法)
+    # 乐器音色合成核心 (重写)
     # ================================================================
+    def _synthesize_note(self, freq: float, sr: int, frame_idx: int,
+                          params: dict, duration_frames: int,
+                          note_active_count: int) -> np.ndarray:
+        """
+        合成一帧的音符，包含：
+        - 谐波叠加
+        - 起音/释放包络
+        - 噪音成分（拨弦/气声/弓噪）
+        - 颤音/音高微变
+        """
+        hop = 512
+        frame_time = frame_idx * hop / sr
+        total_samples = duration_frames * hop
+        # 该帧实际样本数 (最后一帧可能较短)
+        actual_samples = hop
+        t = np.arange(actual_samples, dtype=np.float64) / sr
+
+        harmonics = params["harmonics"]
+        noise_amount = params["noise_amount"]
+        vibrato_amount = params["vibrato_amount"]
+        vibrato_rate = params["vibrato_rate"]
+        pitch_fluctuation = params["pitch_fluctuation"]
+
+        # 1) 颤音: 缓慢调制音高
+        if vibrato_amount > 0:
+            vibrato_hz = vibrato_amount * np.sin(2 * np.pi * vibrato_rate * frame_time)
+            current_freq = freq * (2.0 ** (vibrato_hz / 12.0))
+        else:
+            current_freq = freq
+
+        # 2) 音高微随机波动 (每个音符周期变化)
+        perlin_shift = pitch_fluctuation * np.sin(2 * np.pi * 0.7 * frame_time) * 0.5
+        current_freq *= (2.0 ** (perlin_shift / 12.0))
+
+        # 3) 谐波叠加合成
+        frame_audio = np.zeros(actual_samples, dtype=np.float64)
+        for h_idx, h_amp in enumerate(harmonics):
+            h_freq = float(current_freq) * (h_idx + 1)
+            if h_freq > sr / 2:
+                break
+            # 每个谐波独立的相位 (避免所有谐波同相产生的刺耳感)
+            phase_offset = 2 * np.pi * h_freq * frame_time
+            # 高次谐波加一点点随机相位偏移 (更自然的音色)
+            rand_phase = h_idx * 0.1  # 固定的相位移位
+            frame_audio += h_amp * np.sin(2 * np.pi * h_freq * t + phase_offset + rand_phase)
+
+        # 4) 非谐波噪音成分
+        if noise_amount > 0:
+            noise = np.random.randn(actual_samples).astype(np.float64)
+            # 噪音成分类似滤波白噪音 (通过简单的低通)
+            noise_smooth = (noise + np.roll(noise, 1)) * 0.5
+            frame_audio += noise_amount * noise_smooth * 0.3
+
+        # 5) 包络: 起音 + 释放
+        # 起音: 根据乐器不同有差异
+        attack_len = max(2, int(actual_samples * params["attack_ratio"] * 3))
+        release_len = max(2, int(actual_samples * params["release_ratio"] * 2))
+
+        envelope = np.ones(actual_samples)
+        if attack_len < actual_samples:
+            envelope[:attack_len] = np.linspace(0, 1, attack_len) ** 0.7
+        if release_len < actual_samples:
+            envelope[-release_len:] = np.linspace(1, 0, release_len) ** 1.2
+
+        frame_audio *= envelope
+
+        return frame_audio
     def _detect_pitch(self, samples: np.ndarray, sr: int,
-                      fmin: float = 55.0, fmax: float = 1600.0,
-                      hop: int = 512) -> tuple:
-        """返回 (pitch_hz, confidence)"""
-        n_fft = 2048
-        n_frames = 1 + (len(samples) - n_fft) // hop
-        if n_frames <= 0:
-            return np.array([]), np.array([])
+                          fmin: float = 55.0, fmax: float = 1600.0,
+                          hop: int = 512) -> tuple:
+            """返回 (pitch_hz, confidence)"""
+            n_fft = 2048
+            n_frames = 1 + (len(samples) - n_fft) // hop
+            if n_frames <= 0:
+                return np.array([]), np.array([])
 
-        # 分块处理防止大数组
-        chunk_size = min(n_frames, 2000)
-        all_pitch, all_conf = [], []
+            # 分块处理防止大数组
+            chunk_size = min(n_frames, 2000)
+            all_pitch, all_conf = [], []
 
-        for chunk_start in range(0, n_frames, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, n_frames)
-            n_chunk = chunk_end - chunk_start
+            for chunk_start in range(0, n_frames, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, n_frames)
+                n_chunk = chunk_end - chunk_start
 
-            # 构建帧矩阵
-            frames = np.zeros((n_chunk, n_fft))
-            for j in range(n_chunk):
-                i = chunk_start + j
-                s = i * hop
-                e = min(s + n_fft, len(samples))
-                frames[j, :len(samples[s:e])] = samples[s:e]
+                # 构建帧矩阵
+                frames = np.zeros((n_chunk, n_fft))
+                for j in range(n_chunk):
+                    i = chunk_start + j
+                    s = i * hop
+                    e = min(s + n_fft, len(samples))
+                    frames[j, :len(samples[s:e])] = samples[s:e]
 
-            # 加窗
-            frames *= np.hanning(n_fft)
+                # 加窗
+                frames *= np.hanning(n_fft)
 
-            # 自相关法求基频
-            fft = np.fft.rfft(frames)
-            power = np.abs(fft) ** 2
-            acf = np.fft.irfft(power, n=n_fft, axis=1)[:, :n_fft // 2]
-            # 归一化
-            acf /= np.maximum(np.abs(acf[:, 0:1]), 1e-10)
+                # 自相关法求基频
+                fft = np.fft.rfft(frames)
+                power = np.abs(fft) ** 2
+                acf = np.fft.irfft(power, n=n_fft, axis=1)[:, :n_fft // 2]
+                # 归一化
+                acf /= np.maximum(np.abs(acf[:, 0:1]), 1e-10)
 
-            # 搜索范围
-            min_idx = int(sr / fmax)
-            max_idx = int(sr / fmin)
-            if max_idx >= acf.shape[1]:
-                max_idx = acf.shape[1] - 1
-            if min_idx >= max_idx:
-                min_idx = max(1, max_idx - 1)
+                # 搜索范围
+                min_idx = int(sr / fmax)
+                max_idx = int(sr / fmin)
+                if max_idx >= acf.shape[1]:
+                    max_idx = acf.shape[1] - 1
+                if min_idx >= max_idx:
+                    min_idx = max(1, max_idx - 1)
 
-            search = acf[:, min_idx:max_idx + 1]
-            if search.shape[1] == 0:
-                all_pitch.append(np.zeros(n_chunk))
-                all_conf.append(np.zeros(n_chunk))
-                continue
+                search = acf[:, min_idx:max_idx + 1]
+                if search.shape[1] == 0:
+                    all_pitch.append(np.zeros(n_chunk))
+                    all_conf.append(np.zeros(n_chunk))
+                    continue
 
-            peak_idx = np.argmax(search, axis=1)
-            peak_val = np.max(search, axis=1)
-            lag = min_idx + peak_idx
+                peak_idx = np.argmax(search, axis=1)
+                peak_val = np.max(search, axis=1)
+                lag = min_idx + peak_idx
 
-            pitch = np.where(
-                (peak_val > 0.15) & (lag > 0),
-                sr / lag.astype(float),
-                0.0
-            )
-            all_pitch.append(pitch)
-            all_conf.append(peak_val)
+                pitch = np.where(
+                    (peak_val > 0.15) & (lag > 0),
+                    sr / lag.astype(float),
+                    0.0
+                )
+                all_pitch.append(pitch)
+                all_conf.append(peak_val)
 
-        pitch_arr = ndimage.median_filter(np.concatenate(all_pitch)[:n_frames], size=5)
-        conf_arr = np.concatenate(all_conf)[:n_frames]
-        return pitch_arr, conf_arr
+            pitch_arr = ndimage.median_filter(np.concatenate(all_pitch)[:n_frames], size=5)
+            conf_arr = np.concatenate(all_conf)[:n_frames]
+            return pitch_arr, conf_arr
 
-    # ================================================================
-    # 旋律提取（供前端可视化使用）
-    # ================================================================
+        # ================================================================
+        # 旋律提取（供前端可视化使用）
+        # ================================================================
     def extract_melody(self, audio_path: str) -> dict:
         """提取音频的旋律音高，VAD门控确保静音段无音符"""
         samples, sr = self._read_wav(audio_path)
