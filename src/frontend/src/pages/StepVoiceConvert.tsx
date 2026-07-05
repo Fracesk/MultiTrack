@@ -1,9 +1,12 @@
 ﻿import React, { useState, useRef, useEffect } from "react";
-import { Button, Slider, Card, Row, Col, Space, Tag, Typography, Input, message, Progress, Radio } from "antd";
+import {
+  Button, Slider, Card, Row, Col, Space, Tag, Typography,
+  Input, message, Progress, Radio, Divider, Alert,
+} from "antd";
 import {
   SoundOutlined, LeftOutlined, RightOutlined, CheckOutlined,
   SearchOutlined, PlayCircleOutlined, PauseCircleOutlined,
-  StopOutlined, AudioOutlined, StepForwardOutlined,
+  StopOutlined, AudioOutlined, StepForwardOutlined, InfoCircleOutlined,
 } from "@ant-design/icons";
 import { useAppStore, VoicePreset, StemTrack } from "../stores/appStore";
 import { convertVoice, fetchVoices, getAudioUrl } from "../utils/api";
@@ -30,7 +33,7 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
   const [progressMsg, setProgressMsg] = useState("");
   const intervalRef = useRef<number | null>(null);
 
-  // 可用来变声的音频源：原始音频 + 所有分离后的 stems
+  // 可选音频源
   const sourceOptions: { label: string; value: string; icon: string }[] = [];
   if (audioFile?.uploadedPath || audioFile?.path) {
     sourceOptions.push({
@@ -47,16 +50,17 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
     });
   });
 
-  // 默认选中人声（如果有）
+  // 默认选中人声轨
   useEffect(() => {
     if (!selectedSourceStem && sourceOptions.length > 0) {
-      const vocals = sourceOptions.find((o) => o.label === "Vocal" || o.label === "vocals");
-      if (vocals) setSelectedSourceStem(vocals.value);
-      else setSelectedSourceStem(sourceOptions[0].value);
+      const vocals = sourceOptions.find(
+        (o) => o.label === "Vocal" || o.label === "vocals" || o.icon === "🎤"
+      );
+      setSelectedSourceStem(vocals?.value || sourceOptions[0].value);
     }
   }, [stems, audioFile]);
 
-  // Load voices from backend
+  // 加载音色列表
   useEffect(() => {
     fetchVoices().then((data) => {
       const all: VoicePreset[] = [];
@@ -82,7 +86,7 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
         { id: "robot", name: "电子合成音", category: "特效", isBuiltin: true },
         { id: "narrator", name: "影视旁白", category: "特效", isBuiltin: true },
         { id: "vintage", name: "复古电台", category: "特效", isBuiltin: true },
-        // Instrument voices
+        // 乐器
         { id: "instrument-piano", name: "🎹 钢琴", category: "乐器模仿", isBuiltin: true },
         { id: "instrument-guitar", name: "🎸 吉他", category: "乐器模仿", isBuiltin: true },
         { id: "instrument-violin", name: "🎻 小提琴", category: "乐器模仿", isBuiltin: true },
@@ -103,11 +107,13 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
     setProgressMsg("正在准备...");
     if (intervalRef.current) clearInterval(intervalRef.current);
     let p = 0;
+    const isInstrument = selectedVoice?.category === "乐器模仿";
     intervalRef.current = window.setInterval(() => {
       p += Math.random() * 3;
-      if (p < 30) setProgressMsg("正在分析音频特征...");
-      else if (p < 60) setProgressMsg("正在应用音色滤镜...");
-      else if (p < 85) setProgressMsg("正在合成音轨...");
+      if (p < 20) setProgressMsg(isInstrument ? "正在提取旋律..." : "正在分析音频特征...");
+      else if (p < 40) setProgressMsg(isInstrument ? "正在识别音高序列..." : "正在调整音高...");
+      else if (p < 60) setProgressMsg(isInstrument ? "正在合成乐器音色..." : "正在应用音色滤镜...");
+      else if (p < 85) setProgressMsg(isInstrument ? "正在演奏..." : "正在合成音轨...");
       else setProgressMsg("即将完成...");
       setProgress(Math.min(95, p));
     }, 500);
@@ -119,7 +125,7 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
       intervalRef.current = null;
     }
     setProgress(100);
-    setProgressMsg("转换完成！");
+    setProgressMsg("完成！");
     setTimeout(() => {
       setProgress(0);
       setProgressMsg("");
@@ -132,7 +138,6 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
       message.warning("请先选择一个音频源");
       return;
     }
-
     setConverting(true);
     startProgressSim();
 
@@ -147,7 +152,12 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
         setPreviewUrl(url);
         setConvertedVocalsPath(result.path);
         stopProgressSim();
-        message.success({ content: "转换完成！点击试听按钮播放", key: "convert", duration: 3 });
+        const isInstrument = voice.category === "乐器模仿";
+        message.success({
+          content: isInstrument ? `🎵 ${voice.name} 演奏完成！点击试听` : "转换完成！点击试听按钮播放",
+          key: "convert",
+          duration: 3,
+        });
       } else {
         stopProgressSim();
         message.error({ content: "转换失败", key: "convert" });
@@ -157,22 +167,14 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
       console.error("Convert error:", e);
       message.warning({ content: "后端转换失败，请检查后端服务", key: "convert", duration: 3 });
     }
-
     setConverting(false);
   };
 
   const handlePlayPause = () => {
-    if (isPlaying) {
-      pause();
-      return;
-    }
-    if (previewUrl) {
-      stop();
-      play(previewUrl);
-    }
+    if (isPlaying) { pause(); return; }
+    if (previewUrl) { stop(); play(previewUrl); }
   };
 
-  // Playback progress bar
   const playbackPercent = duration && duration > 0 ? ((currentTime || 0) / duration) * 100 : 0;
   const playbackTimeStr = (t: number) => {
     const m = Math.floor(t / 60);
@@ -180,20 +182,41 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
+  const isInstrumentMode = categoryFilter === "乐器模仿" || selectedVoice?.category === "乐器模仿";
+
   return (
-    <div className="step-card active" style={{ maxWidth: 900, margin: "0 auto", width: "100%" }}>
+    <div className="step-card active" style={{ maxWidth: 950, margin: "0 auto", width: "100%" }}>
       <div className="step-header">
         <div className="step-number active">3</div>
-        <span className="step-title">🎛️ 变声与乐器模仿</span>
-        {selectedVoice && <Tag color="blue">{selectedVoice.name}</Tag>}
+        <span className="step-title">
+          {selectedVoice?.category === "乐器模仿" ? "🎻 乐器演奏旋律" : "🎛️ 人声变声翻唱"}
+        </span>
+        {selectedVoice && <Tag color={selectedVoice?.category === "乐器模仿" ? "green" : "blue"}>{selectedVoice.name}</Tag>}
         {previewUrl && <Tag color="green">✅ 已转换</Tag>}
       </div>
 
       <div className="step-content">
-        {/* 选择音频源 - 新增 */}
-        <div style={{ marginBottom: 20, padding: "12px 16px", background: "#f9f9ff", borderRadius: 8, border: "1px solid #e8e8f0" }}>
+        {/* 模式提示 */}
+        {isInstrumentMode && (
+          <Alert
+            type="info"
+            showIcon
+            icon={<InfoCircleOutlined />}
+            message="乐器模仿模式"
+            description="系统会从音频中提取旋律（音高序列），然后用所选乐器的音色重新演奏这段旋律。适合人声清唱或旋律清晰的音轨。"
+            style={{ marginBottom: 16, background: "#f6ffed", border: "1px solid #b7eb8f" }}
+          />
+        )}
+
+        {/* 选择音频源 */}
+        <div style={{
+          marginBottom: 20, padding: "12px 16px",
+          background: isInstrumentMode ? "#f6ffed" : "#f9f9ff",
+          borderRadius: 8,
+          border: isInstrumentMode ? "1px solid #b7eb8f" : "1px solid #e8e8f0",
+        }}>
           <Text strong style={{ display: "block", marginBottom: 8 }}>
-            <AudioOutlined /> 选择要变声的音频源：
+            <AudioOutlined /> 选择要处理的音频源：
           </Text>
           <Radio.Group
             value={selectedSourceStem}
@@ -224,14 +247,14 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
         </div>
 
         <Row gutter={24}>
-          {/* 左侧：音色/乐器选择 */}
+          {/* 左侧：音色选择 */}
           <Col span={14}>
             <Text strong style={{ display: "block", marginBottom: 8 }}>
-              选择目标音色或乐器：
+              选择效果：
             </Text>
             <Input
               prefix={<SearchOutlined />}
-              placeholder="搜索音色或乐器..."
+              placeholder="搜索..."
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               style={{ marginBottom: 12 }}
@@ -246,14 +269,22 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
                     size="small"
                     type={categoryFilter === cat ? "primary" : "default"}
                     onClick={() => setCategoryFilter(cat)}
+                    style={cat === "乐器模仿" ? {
+                      borderColor: "#52c41a",
+                      color: categoryFilter === cat ? "#fff" : "#52c41a",
+                      background: categoryFilter === cat ? "#52c41a" : undefined,
+                    } : undefined}
                   >
-                    {cat}
+                    {cat === "乐器模仿" ? "🎻 " : ""}{cat}
                   </Button>
                 ))}
               </Space>
             </div>
 
-            <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{
+              maxHeight: 320, overflowY: "auto",
+              display: "flex", flexDirection: "column", gap: 6,
+            }}>
               {filteredVoices.map((voice) => {
                 const isInstrument = voice.category === "乐器模仿";
                 const isSelected = selectedVoice?.id === voice.id;
@@ -264,12 +295,15 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
                     hoverable
                     loading={converting && isSelected}
                     style={{
-                      borderColor: isSelected ? (isInstrument ? "#52c41a" : "#1F4788") : undefined,
+                      borderColor: isSelected
+                        ? (isInstrument ? "#52c41a" : "#1F4788")
+                        : undefined,
                       background: isSelected
                         ? (isInstrument ? "#f6ffed" : "#f0f5ff")
                         : (isInstrument ? "#fafff5" : undefined),
                       cursor: converting ? "not-allowed" : "pointer",
                       transition: "all 0.2s",
+                      opacity: converting && !isSelected ? 0.6 : 1,
                     }}
                     onClick={() => !converting && handleConvert(voice)}
                   >
@@ -288,13 +322,18 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
                       <Space>
                         {isSelected && !converting && <CheckOutlined style={{ color: "#1F4788" }} />}
                         {converting && isSelected && (
-                          <span style={{ fontSize: 12, color: "#666" }}>转换中...</span>
+                          <span style={{ fontSize: 12, color: "#666" }}>处理中...</span>
                         )}
                       </Space>
                     </div>
                     {isInstrument && (
                       <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-                        用人声旋律模拟 {voice.name.replace(/[🎹🎸🎻🎵🎺]/g, "").trim()} 音色
+                        🎵 提取旋律 → 用 {voice.name.replace(/[🎹🎸🎻🎵🎺]/g, "").trim()} 音色重新演奏
+                      </div>
+                    )}
+                    {!isInstrument && (
+                      <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+                        🗣️ 改变人声为 {voice.name} 音色
                       </div>
                     )}
                   </Card>
@@ -306,7 +345,7 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
           {/* 右侧：参数 + 播放 */}
           <Col span={10}>
             <Text strong style={{ display: "block", marginBottom: 16 }}>
-              音色参数调节
+              参数调节
             </Text>
 
             <div style={{ marginBottom: 20 }}>
@@ -327,7 +366,7 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
 
             <div style={{ marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <Text>转换强度</Text>
+                <Text>效果强度</Text>
                 <Text type="secondary" style={{ fontSize: 12 }}>{voiceParams.intensity}%</Text>
               </div>
               <Slider
@@ -355,16 +394,12 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
               </div>
             )}
 
-            {/* 试听区域 - 带进度条 */}
+            {/* 试听区域 */}
             {previewUrl && (
-              <div
-                style={{
-                  background: "#f5f5f5",
-                  borderRadius: 8,
-                  padding: "12px 16px",
-                  marginBottom: 12,
-                }}
-              >
+              <div style={{
+                background: isInstrumentMode ? "#f6ffed" : "#f5f5f5",
+                borderRadius: 8, padding: "12px 16px", marginBottom: 12,
+              }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
                   <Button
                     type="primary"
@@ -373,8 +408,8 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
                     onClick={handlePlayPause}
                     size="large"
                     style={{
-                      background: selectedVoice?.category === "乐器模仿" ? "#52c41a" : "#1F4788",
-                      borderColor: selectedVoice?.category === "乐器模仿" ? "#52c41a" : "#1F4788",
+                      background: isInstrumentMode ? "#52c41a" : "#1F4788",
+                      borderColor: isInstrumentMode ? "#52c41a" : "#1F4788",
                     }}
                   />
                   <div style={{ flex: 1 }}>
@@ -387,11 +422,10 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
                   </div>
                 </div>
 
-                {/* 播放进度条 */}
                 <Progress
                   percent={playbackPercent}
                   showInfo={false}
-                  strokeColor={selectedVoice?.category === "乐器模仿" ? "#52c41a" : "#1F4788"}
+                  strokeColor={isInstrumentMode ? "#52c41a" : "#1F4788"}
                   size="small"
                   style={{ marginBottom: 4 }}
                 />
@@ -407,9 +441,16 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
             )}
 
             {!previewUrl && !converting && (
-              <Text type="secondary" style={{ fontSize: 12, display: "block", textAlign: "center", marginTop: 20 }}>
-                💡 先在上方选一个音频源，再点击左侧音色/乐器进行转换
-              </Text>
+              <div style={{ marginTop: 20 }}>
+                <Text type="secondary" style={{ fontSize: 12, display: "block", textAlign: "center" }}>
+                  💡 先选音频源，再点左侧效果
+                </Text>
+                <Divider style={{ fontSize: 11, color: "#ccc" }}>提示</Divider>
+                <Text type="secondary" style={{ fontSize: 11, display: "block", textAlign: "center" }}>
+                  🎤 人声变声 = 改变音色<br />
+                  🎻 乐器模仿 = 提取旋律用乐器演奏
+                </Text>
+              </div>
             )}
           </Col>
         </Row>
@@ -419,13 +460,7 @@ const StepVoiceConvert: React.FC<{ onNext: () => void; onPrev: () => void }> = (
             <Button onClick={onPrev} icon={<LeftOutlined />}>
               返回分离
             </Button>
-            <Button
-              type="primary"
-              size="large"
-              onClick={onNext}
-              icon={<RightOutlined />}
-              disabled={!selectedVoice}
-            >
+            <Button type="primary" size="large" onClick={onNext} icon={<RightOutlined />} disabled={!selectedVoice}>
               进入导出
             </Button>
           </Space>
